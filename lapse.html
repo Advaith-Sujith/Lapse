@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fullscreen Timer</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg-dark:#000;
+    --fg-dark:#fff;
+
+    --bg-light:#f6f6f7;
+    --fg-light:#111;
+
+    --popup-bg-dark: rgb(0, 0, 0, 0.90);
+    --popup-bg-light: rgba(255,255,255,0.96);
+  }
+
+  html,body{
+    height:100%;
+    margin:0;
+    overflow:hidden;
+    font-family: Anton, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    transition: background-color .25s, color .25s;
+  }
+
+  body.dark { background:var(--bg-dark); color:var(--fg-dark); }
+  body.light { background:var(--bg-light); color:var(--fg-light); }
+
+  #timer {
+  position: absolute;
+  top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  font-size:16vw;
+  letter-spacing:.6vw;
+  line-height:1;
+  text-align:center;
+  user-select:none;
+
+  display: inline-flex;        /* NEW */
+  align-items: center;         /* NEW → keeps AM/PM aligned horizontally */
+}
+
+
+  .ampm {
+  font-size:4vw;
+  opacity:0.8;
+  margin-left:1vw;
+  color:rgb(75, 228, 255);
+  vertical-align:middle;
+}
+
+
+
+
+  .blink { animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { color:rgb(75, 228, 255); } }
+
+  #helpPopup {
+    position:fixed;
+    top:50%; left:50%;
+    transform:translate(-50%,-50%);
+    width:70vw; height:70vh;
+    border-radius:20px;
+    padding:36px;
+    display:none;
+    justify-content:center;
+    align-items:center;
+    text-align:center;
+    box-shadow:0 10px 40px rgba(0,0,0,0.45);
+    z-index:9999;
+  }
+
+  body.dark #helpPopup { background:var(--popup-bg-dark); color:#fff; }
+  body.light #helpPopup { background:var(--popup-bg-light); color:#111; }
+
+  #helpPopup h1 { font-size:34px; margin:0 0 12px; }
+  #helpPopup p { font-size:18px; margin:6px 0; }
+
+  iframe#audioPlayer {
+    position:fixed;
+    width:1px; height:1px; opacity:0;
+    pointer-events:none; border:0;
+    left:0; top:0;
+  }
+
+  @media(max-width:600px){
+    #timer { font-size:26vw; letter-spacing:.2vw; }
+    .ampm { font-size:7vw; }
+  }
+</style>
+</head>
+<body class="dark">
+
+<div id="timer">00:00:00</div>
+
+<div id="helpPopup">
+  <div>
+    <h1>Help</h1>
+
+    <p><strong>M</strong> — Mute / Unmute (fade)</p>
+    <p><strong>H</strong> — Toggle help</p>
+    <p><strong>L</strong> — Light / Dark</p>
+    <p><strong>F</strong> — Fullscreen</p>
+    <p><strong>f</strong> — 12h / 24h clock</p>
+
+    <br>
+
+    <p><strong>Space</strong> — Start / Pause</p>
+    <p><strong>S</strong> — Switch Timer / Stopwatch</p>
+    <p><strong>C</strong> — Clock mode</p>
+    <p><strong>R</strong> — Reset Timer/Stopwatch</p>
+
+    <br>
+
+    <p><strong>← →</strong> — Move selection</p>
+    <p><strong>↑ ↓</strong> — Change value</p>
+
+  </div>
+</div>
+
+<iframe
+  id="audioPlayer"
+  src="https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1&mute=1&controls=0&playsinline=1&fs=0&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1&enablejsapi=1&pip=0"
+  allow="autoplay; encrypted-media"
+  disablepictureinpicture
+  sandbox="allow-scripts allow-same-origin">
+</iframe>
+
+<script>
+/* ==== STATE ==== */
+const timerEl = document.getElementById("timer");
+const helpPopup = document.getElementById("helpPopup");
+const body = document.body;
+
+let h=0, m=0, s=0;
+let is24 = true;
+let running = false;
+let mode = "timer"; // timer/stopwatch/clock
+let editingIndex = 0;
+let hourMode = true;
+let interval=null, clockInt=null;
+
+let dark = true;
+let helpOpen = false;
+
+/* ==== DISPLAY ==== */
+function pad(n){ return String(n).padStart(2,"0"); }
+
+function updateTimerDisplay(){
+  if(mode==="clock") return;
+  const arr=[pad(h),pad(m),pad(s)];
+  const edited = !running;
+
+  if(hourMode){
+    timerEl.innerHTML = arr.map((p,i)=>(
+      i===editingIndex && edited ? `<span class="blink">${p}</span>` : p
+    )).join(":");
+  } else {
+    timerEl.innerHTML = [arr[1],arr[2]].map((p,i)=>(
+      (i+1)===editingIndex && edited ? `<span class="blink">${p}</span>` : p
+    )).join(":");
+  }
+}
+
+function updateClock(){
+  const now = new Date();
+  let hh = now.getHours();
+  const mm = now.getMinutes();
+  const ss = now.getSeconds();
+
+  if(is24){
+    timerEl.innerHTML = `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+  } else {
+    const ampm = hh>=12 ? "PM" : "AM";
+    hh = hh%12 || 12;
+    timerEl.innerHTML =
+      `${pad(hh)}:${pad(mm)}:${pad(ss)} <span class="ampm">${ampm}</span>`;
+  }
+}
+
+/* ==== LOGIC ==== */
+function tick(){
+  if(mode==="timer"){
+    if(h===0 && m===0 && s===0){ stop(); return; }
+    if(s>0) s--;
+    else { s=59; if(m>0) m--; else { m=59; if(h>0) h--; } }
+  } else if(mode==="stopwatch"){
+    s++; if(s>=60){ s=0; m++; }
+    if(m>=60){ m=0; h++; }
+  }
+  updateTimerDisplay();
+}
+
+function startTimer(){
+  clearInterval(interval);
+  interval=setInterval(()=>{
+    if(mode==="clock") updateClock();
+    else tick();
+  },1000);
+  running=true;
+  updateTimerDisplay();
+}
+
+function stop(){
+  clearInterval(interval);
+  running=false;
+  updateTimerDisplay();
+}
+
+function reset(){
+  if(mode==="clock") return;
+  h=m=s=0;
+  updateTimerDisplay();
+}
+
+function enterClock(){
+  mode="clock"; stop();
+  clearInterval(clockInt);
+  updateClock();
+  clockInt=setInterval(updateClock,1000);
+}
+
+function exitClock(){
+  mode="timer";
+  clearInterval(clockInt);
+  updateTimerDisplay();
+}
+
+/* ==== THEME ==== */
+function applyTheme(){
+  if(dark){ body.classList.add("dark"); body.classList.remove("light"); }
+  else { body.classList.add("light"); body.classList.remove("dark"); }
+}
+applyTheme();
+
+/* ==== YT API & Fade ==== */
+let player=null, isMuted=true, volume=0;
+
+(function loadYT(){
+  const s=document.createElement("script");
+  s.src="https://www.youtube.com/iframe_api";
+  document.head.appendChild(s);
+})();
+
+function onYouTubeIframeAPIReady(){
+  try{
+    player=new YT.Player("audioPlayer",{
+      events:{
+        onReady:e=>{
+          e.target.setVolume(0);
+          e.target.playVideo();
+          e.target.mute();
+        }
+      }
+    });
+  }catch(e){}
+}
+
+function fadeVolume(target){
+  if(!player) return;
+  const step=(target>volume)?2:-2;
+  const id=setInterval(()=>{
+    volume+=step;
+    if((step>0 && volume>=target)||(step<0 && volume<=target)){
+      volume=target; clearInterval(id);
+    }
+    try{ player.setVolume(volume); }catch(e){}
+  },40);
+}
+
+/* ==== FULLSCREEN ==== */
+function toggleFullscreen(){
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{});
+  } else {
+    document.exitFullscreen().catch(()=>{});
+  }
+}
+
+/* ==== KEYS ==== */
+document.addEventListener("keydown", e=>{
+  const k=e.key.toLowerCase();
+
+  if(k==="h"){
+    helpOpen=!helpOpen;
+    helpPopup.style.display = helpOpen ? "flex" : "none";
+    return;
+  }
+
+  if(k==="l"){ dark=!dark; applyTheme(); return; }
+
+  if(k==="m"){
+    if(!player) return;
+    if(isMuted){ player.unMute(); fadeVolume(100); }
+    else { fadeVolume(0); setTimeout(()=>{player.mute();},500); }
+    isMuted=!isMuted;
+    return;
+  }
+
+  if(k==="f" && !e.shiftKey){  // small f → time format
+    is24=!is24;
+    if(mode==="clock") updateClock();
+    return;
+  }
+
+  if(k==="f" && e.shiftKey){   // SHIFT+F → fullscreen
+    toggleFullscreen();
+    return;
+  }
+
+  if(k==="c"){
+    if(mode==="clock"){ exitClock(); }
+    else enterClock();
+    return;
+  }
+
+  if(k==="s"){
+    if(mode==="clock"){ exitClock(); mode="timer"; updateTimerDisplay(); return; }
+    mode = (mode==="timer")?"stopwatch":"timer";
+    stop(); updateTimerDisplay();
+    return;
+  }
+
+  if(k==="r"){ reset(); return; }
+
+  if(e.code==="Space"){
+    e.preventDefault();
+    if(mode!=="clock") running?stop():startTimer();
+    return;
+  }
+
+  if(mode==="clock") return;
+
+  if(k==="arrowright"){
+    editingIndex = (editingIndex+1) % (hourMode?3:2);
+    updateTimerDisplay(); return;
+  }
+
+  if(k==="arrowleft"){
+    editingIndex = (editingIndex-1+(hourMode?3:2))%(hourMode?3:2);
+    updateTimerDisplay(); return;
+  }
+
+  if(k==="arrowup"){
+    if(hourMode){
+      if(editingIndex===0) h=Math.min(99,h+1);
+      if(editingIndex===1) m=(m+1)%60;
+      if(editingIndex===2) s=(s+1)%60;
+    } else {
+      if(editingIndex===0) m=(m+1)%60;
+      if(editingIndex===1) s=(s+1)%60;
+    }
+    updateTimerDisplay(); return;
+  }
+
+  if(k==="arrowdown"){
+    if(hourMode){
+      if(editingIndex===0) h=Math.max(0,h-1);
+      if(editingIndex===1) m=(m+59)%60;
+      if(editingIndex===2) s=(s+59)%60;
+    } else {
+      if(editingIndex===0) m=(m+59)%60;
+      if(editingIndex===1) s=(s+59)%60;
+    }
+    updateTimerDisplay(); return;
+  }
+});
+
+updateTimerDisplay();
+</script>
+</body>
+</html>
